@@ -23,3 +23,7 @@ forge-tools --help
    `register(subparsers)` (returns the sub-parser) and `run(args)` (returns an exit code).
 2. Add the module to `COMMANDS` in `src/forge_tools/commands/__init__.py`.
 3. Add tests in `tests/`.
+4. For diagnostics use `logger = logging.getLogger(__name__)`; don't configure
+   logging in the command. `forge-tools --log-level LEVEL` (also accepted after
+   the sub-command, or via `$FORGE_TOOLS_LOG_LEVEL`) sets the level centrally
+   (`src/forge_tools/log.py`). Logs go to stderr; print actual results to stdout.

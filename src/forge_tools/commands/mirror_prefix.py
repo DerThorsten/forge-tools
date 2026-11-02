@@ -17,10 +17,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
-import sys
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -46,12 +45,7 @@ USER_AGENT = "forge-tools"
 CHUNK = 1 << 20
 TIMEOUT = 300
 
-_print_lock = threading.Lock()
-
-
-def log(msg: str) -> None:
-    with _print_lock:
-        print(msg, flush=True)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -94,7 +88,7 @@ def _with_retries(func, retries: int, what: str):
                 raise
             err = exc
         delay = 2**attempt
-        log(f"RETRY  {what}: {err} (retrying in {delay}s)")
+        logger.warning("retrying %s in %ss: %s", what, delay, err)
         time.sleep(delay)
     raise AssertionError("unreachable")  # pragma: no cover
 
@@ -107,6 +101,7 @@ def fetch_repodata(
 ) -> dict:
     """Return the repodata of ``platform``; an empty dict if it doesn't exist."""
     url = f"{base_url}/{platform}/repodata.json"
+    logger.debug("fetching %s", url)
 
     def fetch():
         with urllib.request.urlopen(_request(url, token), timeout=TIMEOUT) as resp:
@@ -184,7 +179,7 @@ def upload(
             if attempt == retries:
                 raise
             delay = 2**attempt
-            log(f"RETRY  upload {path.name}: {exc} (retrying in {delay}s)")
+            logger.warning("retrying upload of %s in %ss: %s", path.name, delay, exc)
             time.sleep(delay)
     raise AssertionError("unreachable")  # pragma: no cover
 
@@ -206,15 +201,19 @@ def mirror_package(
     local = platform_dir / pkg.filename
     url = f"{source_url}/{pkg.platform}/{urllib.parse.quote(pkg.filename)}"
     try:
+        logger.debug("downloading %s -> %s", url, local)
         sha256, size = download(url, local, source_token, retries)
+        logger.debug("downloaded %s (%d bytes, sha256 %s)", pkg.filename, size, sha256)
         if pkg.sha256 and sha256 != pkg.sha256:
             raise ValueError(f"sha256 mismatch: expected {pkg.sha256}, got {sha256}")
         if pkg.size is not None and size != pkg.size:
             raise ValueError(f"size mismatch: expected {pkg.size}, got {size}")
+        logger.debug("uploading %s to %s/%s", local.name, server, target)
         return upload(server, target, local, token, retries)
     finally:
         # After a successful upload (or a failure) the local copy is not needed.
         local.unlink(missing_ok=True)
+        logger.debug("removed %s", local)
 
 
 # --------------------------------------------------------------------------- #
@@ -279,10 +278,10 @@ def run(args: argparse.Namespace) -> int:
     token = args.token or os.environ.get(TOKEN_ENV)
     source_token = args.source_token or os.environ.get(SOURCE_TOKEN_ENV)
     if not token and not args.dry_run:
-        print(f"error: no API key given (use --token or ${TOKEN_ENV})", file=sys.stderr)
+        logger.error("no API key given (use --token or $%s)", TOKEN_ENV)
         return 2
     if args.jobs < 1:
-        print("error: --jobs must be >= 1", file=sys.stderr)
+        logger.error("--jobs must be >= 1")
         return 2
 
     source_url = channel_url(args.server, args.source)
@@ -299,22 +298,22 @@ def run(args: argparse.Namespace) -> int:
                 fetch_repodata(target_url, platform, token, args.retries), platform
             )
         except Exception as exc:  # noqa: BLE001 - report and abort
-            print(f"error: fetching repodata for {platform}: {exc}", file=sys.stderr)
+            logger.error("fetching repodata for %s failed: %s", platform, exc)
             return 1
         missing = missing_packages(src, dst)
-        log(
-            f"{platform:<20} source: {len(src):>6}  target: {len(dst):>6}  "
-            f"missing: {len(missing):>6}"
+        logger.info(
+            "%-20s source: %6d  target: %6d  missing: %6d",
+            platform, len(src), len(dst), len(missing),
         )
         todo.extend(missing)
 
     if args.dry_run:
         for pkg in todo:
-            log(f"MISSING  {pkg.platform}/{pkg.filename}")
-        log(f"{len(todo)} package(s) would be mirrored")
+            print(f"{pkg.platform}/{pkg.filename}")  # result -> stdout
+        logger.info("%d package(s) would be mirrored", len(todo))
         return 0
     if not todo:
-        log("nothing to do")
+        logger.info("nothing to do")
         return 0
 
     tmp = None
@@ -349,12 +348,12 @@ def run(args: argparse.Namespace) -> int:
                     status = future.result()
                 except Exception as exc:  # noqa: BLE001 - report and continue
                     failed += 1
-                    log(f"[{done}/{len(todo)}] FAILED    {name}: {exc}")
+                    logger.error("[%d/%d] FAILED    %s: %s", done, len(todo), name, exc)
                 else:
-                    log(f"[{done}/{len(todo)}] {status.upper():<9} {name}")
+                    logger.info("[%d/%d] %-9s %s", done, len(todo), status.upper(), name)
     finally:
         if tmp is not None:
             tmp.cleanup()
 
-    log(f"done: {len(todo) - failed} ok, {failed} failed")
+    logger.info("done: %d ok, %d failed", len(todo) - failed, failed)
     return 1 if failed else 0

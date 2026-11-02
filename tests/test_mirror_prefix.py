@@ -64,9 +64,7 @@ def server(monkeypatch):
             if name in fake.fail_upload:
                 raise RuntimeError("upload failed")
 
-    import rattler_build
-
-    monkeypatch.setattr(rattler_build, "upload_package_to_prefix", fake_upload)
+    monkeypatch.setattr(mirror, "upload_package_to_prefix", fake_upload)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -166,7 +164,7 @@ def test_mirror_uploads_only_missing(server, tmp_path, capsys):
         assert u["auth"] == "Bearer T"
     # downloaded files are removed after upload
     assert [p for p in workdir.rglob("*") if p.is_file()] == []
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "done: 2 ok, 0 failed" in out
 
 
@@ -182,9 +180,9 @@ def test_mirror_dry_run_uploads_nothing(server, capsys):
     rc = run_mirror(server, "-p", "noarch", "--dry-run")
     assert rc == 0
     assert server.uploads == []
-    out = capsys.readouterr().out
-    assert "MISSING  noarch/a-1-0.conda" in out
-    assert "1 package(s) would be mirrored" in out
+    captured = capsys.readouterr()
+    assert captured.out == "noarch/a-1-0.conda\n"
+    assert "1 package(s) would be mirrored" in captured.err
 
 
 def test_mirror_nothing_to_do(server, capsys):
@@ -192,7 +190,7 @@ def test_mirror_nothing_to_do(server, capsys):
     server.add("org/dst", "noarch", "a-1-0.conda", b"aaa")
     assert run_mirror(server, "-p", "noarch", "--token", "T") == 0
     assert server.uploads == []
-    assert "nothing to do" in capsys.readouterr().out
+    assert "nothing to do" in capsys.readouterr().err
 
 
 def test_mirror_token_from_env(server, monkeypatch):
@@ -215,7 +213,7 @@ def test_mirror_sha_mismatch_is_not_uploaded(server, tmp_path, capsys):
     rc = run_mirror(server, "-p", "noarch", "--token", "T", "--workdir", str(workdir))
     assert rc == 1
     assert [u["name"] for u in server.uploads] == ["b-1-0.conda"]
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "FAILED    noarch/a-1-0.conda: sha256 mismatch" in out
     assert "done: 1 ok, 1 failed" in out
     assert [p for p in workdir.rglob("*") if p.is_file()] == []
@@ -227,6 +225,6 @@ def test_mirror_upload_error_continues(server, capsys):
     server.fail_upload.add("a-1-0.conda")
     rc = run_mirror(server, "-p", "noarch", "--token", "T", "-j", "1")
     assert rc == 1
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "FAILED    noarch/a-1-0.conda" in out
     assert "UPLOADED  noarch/b-1-0.conda" in out
