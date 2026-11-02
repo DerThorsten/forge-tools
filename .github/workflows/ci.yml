@@ -21,8 +21,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.10", "3.13"]
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.14", "3.15"]
     steps:
       - uses: actions/checkout@v4
 
@@ -43,8 +43,13 @@ jobs:
         run: |
           forge-tools --version
           forge-tools --help
-          forge-tools greet World --times 2
-          forge-tools stats 1 2 3 4 --op mean
-          forge-tools wordcount README.md
-          echo "piped input text" | forge-tools wordcount --words
-          python -m forge_tools greet "python -m"
+          forge-tools mirror-prefix --help
+          forge-tools sha256 --help
+          forge-tools sha256 README.md pyproject.toml
+          forge-tools --log-level DEBUG sha256 README.md
+          forge-tools sha256 --log-level warning README.md
+          python -m forge_tools sha256 README.md
+
+      - name: Import Python API
+        run: |
+          python -c "from forge_tools.mirror_prefix import mirror_prefix, find_missing; from forge_tools.sha256 import sha256_of; from forge_tools.log import setup_logging"

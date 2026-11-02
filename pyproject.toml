@@ -7,7 +7,7 @@ name = "forge-tools"
 version = "0.1.0"
 description = "A collection of small command line tools."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 license = "BSD-3-Clause"
 authors = [{ name = "Thorsten Beier", email = "thorsten.beier@quantstack.net" }]
 classifiers = [
