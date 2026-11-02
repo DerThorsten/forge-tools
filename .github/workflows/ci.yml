@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash -el {0}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.14", "3.15"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up conda-forge environment
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment-dev.yaml
+          create-args: python=${{ matrix.python-version }}
+          cache-environment: true
+
+      - name: Install package
+        run: python -m pip install --no-deps --no-build-isolation -e .
+
+      - name: Run tests
+        run: pytest -v
+
+      - name: Invoke CLI
+        run: |
+          forge-tools --version
+          forge-tools --help
+          forge-tools mirror-prefix --help
+          forge-tools sha256 --help
+          forge-tools sha256 README.md pyproject.toml
+          forge-tools --log-level DEBUG sha256 README.md
+          forge-tools sha256 --log-level warning README.md
+          python -m forge_tools sha256 README.md
+
+      - name: Import Python API
+        run: |
+          python -c "from forge_tools.mirror_prefix import mirror_prefix, find_missing; from forge_tools.sha256 import sha256_of; from forge_tools.log import setup_logging"
