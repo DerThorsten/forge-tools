@@ -1,4 +1,4 @@
-"""``mirror-prefix``: copy all packages of a prefix.dev channel into another channel.
+"""Mirror a prefix.dev channel into another channel.
 
 Flow:
 
@@ -9,12 +9,21 @@ Flow:
    target channel (via py-rattler-build) and delete the local file afterwards.
 
 Channels are given by name (``emscripten-forge-4x``) or as a scoped path
-(``foo/the-channel``) relative to ``--server``.
+(``foo/the-channel``) relative to the server URL.
+
+Python usage::
+
+    from forge_tools.mirror_prefix import find_missing, mirror_prefix
+
+    missing = find_missing("emscripten-forge-4x", "my-mirror")
+    result = mirror_prefix("emscripten-forge-4x", "my-mirror", token="...")
+    if not result.ok:
+        for pkg, exc in result.failed:
+            ...
 """
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import logging
@@ -24,10 +33,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
 from rattler_build import upload_package_to_prefix
 
 
@@ -54,6 +64,23 @@ class Package:
     filename: str
     sha256: str | None
     size: int | None
+
+    @property
+    def name(self) -> str:
+        return f"{self.platform}/{self.filename}"
+
+
+@dataclass
+class MirrorResult:
+    """Outcome of :func:`mirror_prefix`."""
+
+    missing: list[Package] = field(default_factory=list)
+    uploaded: list[Package] = field(default_factory=list)
+    failed: list[tuple[Package, BaseException]] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.failed
 
 
 # --------------------------------------------------------------------------- #
@@ -217,143 +244,132 @@ def mirror_package(
 
 
 # --------------------------------------------------------------------------- #
-# CLI
+# public API
 # --------------------------------------------------------------------------- #
-def register(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
-    parser = subparsers.add_parser(
-        "mirror-prefix",
-        help="mirror a prefix.dev channel to another channel",
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("source", help="source channel, e.g. emscripten-forge-6x")
-    parser.add_argument("target", help="target channel, e.g. emscripten-forge/6x")
-    parser.add_argument(
-        "-p",
-        "--platform",
-        dest="platforms",
-        action="append",
-        metavar="PLATFORM",
-        help=(
-            "platform to mirror (repeatable); default: "
-            + " ".join(DEFAULT_PLATFORMS)
-        ),
-    )
-    parser.add_argument(
-        "--server", default=DEFAULT_SERVER, help=f"default: {DEFAULT_SERVER}"
-    )
-    parser.add_argument(
-        "--token",
-        default=None,
-        help=f"API key for the target channel (default: ${TOKEN_ENV})",
-    )
-    parser.add_argument(
-        "--source-token",
-        default=None,
-        help=f"API key for a private source channel (default: ${SOURCE_TOKEN_ENV})",
-    )
-    parser.add_argument(
-        "-j", "--jobs", type=int, default=4, help="parallel transfers (default: 4)"
-    )
-    parser.add_argument(
-        "--retries", type=int, default=3, help="retries per request (default: 3)"
-    )
-    parser.add_argument(
-        "--workdir",
-        type=Path,
-        default=None,
-        help="directory for temporary downloads (default: a fresh temp dir)",
-    )
-    parser.add_argument(
-        "-n",
-        "--dry-run",
-        action="store_true",
-        help="only list the packages that would be mirrored",
-    )
-    return parser
+def resolve_token(token: str | None, env: str) -> str | None:
+    """Return ``token`` or, if not given, the value of ``$env``."""
+    return token or os.environ.get(env) or None
 
 
-def run(args: argparse.Namespace) -> int:
-    platforms = args.platforms or list(DEFAULT_PLATFORMS)
-    token = args.token or os.environ.get(TOKEN_ENV)
-    source_token = args.source_token or os.environ.get(SOURCE_TOKEN_ENV)
-    if not token and not args.dry_run:
-        logger.error("no API key given (use --token or $%s)", TOKEN_ENV)
-        return 2
-    if args.jobs < 1:
-        logger.error("--jobs must be >= 1")
-        return 2
+def find_missing(
+    source: str,
+    target: str,
+    *,
+    platforms: Sequence[str] = DEFAULT_PLATFORMS,
+    server: str = DEFAULT_SERVER,
+    token: str | None = None,
+    source_token: str | None = None,
+    retries: int = 3,
+) -> list[Package]:
+    """Packages of ``source`` that are not (yet) in ``target``.
 
-    source_url = channel_url(args.server, args.source)
-    target_url = channel_url(args.server, args.target)
+    ``token`` / ``source_token`` default to ``$PREFIX_API_KEY`` /
+    ``$PREFIX_SOURCE_API_KEY`` and are only needed for private channels.
+    """
+    token = resolve_token(token, TOKEN_ENV)
+    source_token = resolve_token(source_token, SOURCE_TOKEN_ENV)
+    source_url = channel_url(server, source)
+    target_url = channel_url(server, target)
 
     todo: list[Package] = []
     for platform in platforms:
-        try:
-            src = packages_of(
-                fetch_repodata(source_url, platform, source_token, args.retries),
-                platform,
-            )
-            dst = packages_of(
-                fetch_repodata(target_url, platform, token, args.retries), platform
-            )
-        except Exception as exc:  # noqa: BLE001 - report and abort
-            logger.error("fetching repodata for %s failed: %s", platform, exc)
-            return 1
+        src = packages_of(
+            fetch_repodata(source_url, platform, source_token, retries), platform
+        )
+        dst = packages_of(
+            fetch_repodata(target_url, platform, token, retries), platform
+        )
         missing = missing_packages(src, dst)
         logger.info(
             "%-20s source: %6d  target: %6d  missing: %6d",
             platform, len(src), len(dst), len(missing),
         )
         todo.extend(missing)
+    return todo
 
-    if args.dry_run:
-        for pkg in todo:
-            print(f"{pkg.platform}/{pkg.filename}")  # result -> stdout
+
+def mirror_prefix(
+    source: str,
+    target: str,
+    *,
+    platforms: Sequence[str] = DEFAULT_PLATFORMS,
+    server: str = DEFAULT_SERVER,
+    token: str | None = None,
+    source_token: str | None = None,
+    jobs: int = 4,
+    retries: int = 3,
+    workdir: str | Path | None = None,
+    dry_run: bool = False,
+) -> MirrorResult:
+    """Mirror all packages of ``source`` that are missing in ``target``.
+
+    Failures of individual packages don't abort the run; they are collected in
+    :attr:`MirrorResult.failed`. Errors fetching repodata and invalid
+    arguments raise.
+
+    With ``dry_run=True`` nothing is downloaded or uploaded and no token is
+    required; only :attr:`MirrorResult.missing` is filled.
+    """
+    if jobs < 1:
+        raise ValueError("jobs must be >= 1")
+    token = resolve_token(token, TOKEN_ENV)
+    source_token = resolve_token(source_token, SOURCE_TOKEN_ENV)
+    if not token and not dry_run:
+        raise ValueError(f"no API key given for the target (token or ${TOKEN_ENV})")
+
+    result = MirrorResult()
+    result.missing = find_missing(
+        source,
+        target,
+        platforms=platforms,
+        server=server,
+        token=token,
+        source_token=source_token,
+        retries=retries,
+    )
+    todo = result.missing
+    if dry_run:
         logger.info("%d package(s) would be mirrored", len(todo))
-        return 0
+        return result
     if not todo:
         logger.info("nothing to do")
-        return 0
+        return result
 
-    tmp = None
-    if args.workdir is None:
-        tmp = tempfile.TemporaryDirectory(prefix="forge-tools-mirror-prefix-")
-        workdir = Path(tmp.name)
-    else:
-        workdir = args.workdir
-        workdir.mkdir(parents=True, exist_ok=True)
-
-    failed = 0
-    try:
-        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+    source_url = channel_url(server, source)
+    with tempfile.TemporaryDirectory(prefix="forge-tools-mirror-prefix-") as tmp:
+        work = Path(workdir) if workdir is not None else Path(tmp)
+        work.mkdir(parents=True, exist_ok=True)
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
             futures = {
                 pool.submit(
                     mirror_package,
                     pkg,
                     source_url=source_url,
-                    server=args.server,
-                    target=args.target,
-                    workdir=workdir,
+                    server=server,
+                    target=target,
+                    workdir=work,
                     token=token,
                     source_token=source_token,
-                    retries=args.retries,
+                    retries=retries,
                 ): pkg
                 for pkg in todo
             }
             for done, future in enumerate(as_completed(futures), 1):
                 pkg = futures[future]
-                name = f"{pkg.platform}/{pkg.filename}"
                 try:
                     status = future.result()
-                except Exception as exc:  # noqa: BLE001 - report and continue
-                    failed += 1
-                    logger.error("[%d/%d] FAILED    %s: %s", done, len(todo), name, exc)
+                except Exception as exc:  # noqa: BLE001 - collect and continue
+                    result.failed.append((pkg, exc))
+                    logger.error(
+                        "[%d/%d] FAILED    %s: %s", done, len(todo), pkg.name, exc
+                    )
                 else:
-                    logger.info("[%d/%d] %-9s %s", done, len(todo), status.upper(), name)
-    finally:
-        if tmp is not None:
-            tmp.cleanup()
+                    result.uploaded.append(pkg)
+                    logger.info(
+                        "[%d/%d] %-9s %s", done, len(todo), status.upper(), pkg.name
+                    )
 
-    logger.info("done: %d ok, %d failed", len(todo) - failed, failed)
-    return 1 if failed else 0
+    logger.info(
+        "done: %d ok, %d failed", len(result.uploaded), len(result.failed)
+    )
+    return result

@@ -6,8 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from forge_tools.cli import main
-from forge_tools.commands import mirror_prefix as mirror
-from forge_tools.commands.mirror_prefix import (
+from forge_tools import mirror_prefix as mirror
+from forge_tools.mirror_prefix import (
     Package,
     channel_url,
     missing_packages,
@@ -228,3 +228,35 @@ def test_mirror_upload_error_continues(server, capsys):
     out = capsys.readouterr().err
     assert "FAILED    noarch/a-1-0.conda" in out
     assert "UPLOADED  noarch/b-1-0.conda" in out
+
+
+# --------------------------------------------------------------------------- #
+# Python API
+# --------------------------------------------------------------------------- #
+def test_python_api_returns_result(server):
+    server.add("src", "noarch", "a-1-0.conda", b"aaa")
+    server.add("src", "noarch", "b-1-0.conda", b"bbb")
+    server.fail_upload.add("b-1-0.conda")
+
+    result = mirror.mirror_prefix(
+        "src", "org/dst", platforms=["noarch"], server=server.url,
+        token="T", retries=0, jobs=1,
+    )
+
+    assert [p.name for p in result.missing] == ["noarch/a-1-0.conda", "noarch/b-1-0.conda"]
+    assert [p.name for p in result.uploaded] == ["noarch/a-1-0.conda"]
+    assert [p.name for p, _ in result.failed] == ["noarch/b-1-0.conda"]
+    assert not result.ok
+
+
+def test_python_api_requires_token(server):
+    with pytest.raises(ValueError, match=mirror.TOKEN_ENV):
+        mirror.mirror_prefix("src", "org/dst", server=server.url)
+
+
+def test_python_api_find_missing(server):
+    server.add("src", "noarch", "a-1-0.conda", b"aaa")
+    server.add("org/dst", "noarch", "a-1-0.conda", b"aaa")
+    server.add("src", "emscripten-wasm32", "c-1-0.tar.bz2", b"ccc")
+    missing = mirror.find_missing("src", "org/dst", server=server.url, retries=0)
+    assert [p.name for p in missing] == ["emscripten-wasm32/c-1-0.tar.bz2"]

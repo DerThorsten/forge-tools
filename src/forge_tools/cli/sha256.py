@@ -1,28 +1,10 @@
-"""``sha256``: sha256 and size of URLs or local files (for recipe sources)."""
+"""CLI for :mod:`forge_tools.sha256`."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
-import urllib.request
-from pathlib import Path
 
-CHUNK = 1 << 20
-
-
-def sha256_of(source: str) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    if Path(source).exists():
-        stream = open(source, "rb")
-    else:
-        request = urllib.request.Request(source, headers={"User-Agent": "forge-tools"})
-        stream = urllib.request.urlopen(request)
-    with stream:
-        while chunk := stream.read(CHUNK):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
+from forge_tools.sha256 import sha256_of
 
 
 def register(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:

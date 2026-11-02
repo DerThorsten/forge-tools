@@ -1,13 +1,14 @@
 """Command line entry point for forge-tools.
 
-Each sub-command lives in its own module inside :mod:`forge_tools.commands`
-and exposes two functions:
+Each sub-command lives in its own module inside this package
+(``forge_tools/cli/<name>.py``, a thin wrapper around the library module
+``forge_tools/<name>.py``) and exposes two functions:
 
 * ``register(subparsers)`` -- adds the sub-command and its arguments.
 * ``run(args)`` -- executes the sub-command and returns an exit code.
 
-Logging is configured centrally here (see :mod:`forge_tools.log`); commands
-only need ``logging.getLogger(__name__)``.
+Logging is configured centrally here (``--log-level``, see
+:mod:`forge_tools.cli.log`); commands only need ``logging.getLogger(__name__)``.
 """
 
 from __future__ import annotations
@@ -16,8 +17,16 @@ import argparse
 from collections.abc import Sequence
 
 from forge_tools import __version__
-from forge_tools.commands import COMMANDS
-from forge_tools.log import add_log_level_argument, setup_logging
+from forge_tools.cli import mirror_prefix, sha256
+from forge_tools.cli.log import add_log_level_argument
+from forge_tools.log import setup_logging
+
+
+# All sub-commands, in the order they appear in ``--help``.
+COMMANDS = [
+    mirror_prefix,
+    sha256,
+]
 
 
 def build_parser() -> argparse.ArgumentParser:

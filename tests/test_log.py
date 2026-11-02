@@ -4,11 +4,12 @@ import pytest
 
 from forge_tools import log
 from forge_tools.cli import build_parser, main
+from forge_tools.cli import log as cli_log
 
 
 @pytest.fixture(autouse=True)
 def no_env_level(monkeypatch):
-    monkeypatch.delenv(log.LEVEL_ENV, raising=False)
+    monkeypatch.delenv(cli_log.LEVEL_ENV, raising=False)
 
 
 def _level():
@@ -40,7 +41,7 @@ def test_subcommand_level_does_not_reset_top_level():
 
 
 def test_level_from_env(monkeypatch):
-    monkeypatch.setenv(log.LEVEL_ENV, "warning")
+    monkeypatch.setenv(cli_log.LEVEL_ENV, "warning")
     assert build_parser().parse_args(["sha256", "X"]).log_level == "WARNING"
 
 
@@ -62,3 +63,23 @@ def test_debug_messages_filtered_at_info(capsys):
     log.setup_logging("INFO")
     logging.getLogger("forge_tools.test").debug("hidden")
     assert "hidden" not in capsys.readouterr().err
+
+
+def test_setup_logging_accepts_names_and_ints():
+    log.setup_logging("warning")
+    assert _level() == logging.WARNING
+    log.setup_logging(logging.DEBUG)
+    assert _level() == logging.DEBUG
+
+
+def test_setup_logging_rejects_unknown_name():
+    with pytest.raises(ValueError, match="invalid log level"):
+        log.setup_logging("LOUD")
+
+
+def test_invalid_level_from_env_is_usage_error(monkeypatch, capsys):
+    monkeypatch.setenv(cli_log.LEVEL_ENV, "nope")
+    with pytest.raises(SystemExit) as exc:
+        main(["sha256", "X"])
+    assert exc.value.code == 2
+    assert "invalid log level" in capsys.readouterr().err

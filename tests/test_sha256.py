@@ -4,8 +4,8 @@ import io
 import pytest
 
 from forge_tools.cli import main
-from forge_tools.commands import sha256 as sha256_cmd
-from forge_tools.commands.sha256 import CHUNK, sha256_of
+from forge_tools import sha256 as sha256_cmd
+from forge_tools.sha256 import CHUNK, sha256_of
 
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ABC_SHA256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
